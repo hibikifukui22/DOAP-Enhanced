@@ -1,0 +1,28 @@
+# --- Game files and anything derived from them: never commit ---
+*.iso
+*.cso
+*.ppst
+/research/
+/archive/
+/patcher/payload.bin
+
+# --- Build output ---
+/build/
+/dist/
+/patcher/obj/
+/patcher/release/
+*.exe
+*.obj
+*.res
+__pycache__/
+*.pyc
+
+# --- Personal data ---
+*.log
+*.dmp
+SAVEDATA/
+
+# --- Editors / OS ---
+.vs/
+.vscode/
+Thumbs.db

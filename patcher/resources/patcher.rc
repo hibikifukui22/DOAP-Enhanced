@@ -1,0 +1,6 @@
+#define IDI_PATCHER 1
+#define IDR_BACKGROUND 101
+#define IDR_PAYLOAD 102
+IDI_PATCHER ICON "resources/patcher.ico"
+IDR_BACKGROUND RCDATA "resources/background.jpg"
+IDR_PAYLOAD RCDATA "payload.bin"
