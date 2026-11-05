@@ -253,3 +253,19 @@ User report on `gate-speed-scene`: passes/sets and spikes miss exactly like DOAX
   flicker on the title screen, because the page handlers also submit the 2D every update.
 - Next: split page update from draw, keep the 2D between updates, or scale the frame counters
   page by page as DOAX2 did.
+
+## 2026-11-04: Pool Hopping HUD and the volleyball load crash (1.0.1, build pt12)
+
+- **Pool Hopping HUD:** the timer (0xD0704) and hop numbers (0xD1194) are drawn by text routine
+  0x2FCE0 inside the logic, which ph_wrap runs every other update, so they flickered. ph_text keeps
+  copies of up to 9 text records and strings at CAVE+0xCD00, and the skipped update draws them again.
+- **Crash:** some volleyball match loads crashed in memcpy (0x1FD900). The crash screen PC 0x20B1D0
+  was stale. Registers read from the PPSSPP process (ra 0x2163AC) gave the real path: 0x20B918 ->
+  0x21631C copies palette data to object +0x5C, which was 0. 64 MB (MEMSIZE=1 in PARAM.SFO plus
+  a bigger sce_newlib_heap_kb_size at 0x28A2E8) crashed the same way, so memory is not the cause.
+- **Guard:** the copies at 0x20B918, 0x20B1C8 and 0x20B610 are skipped when the destination is below
+  VRAM. No visible problem in play. Root cause still open: why the palette buffer is missing, and
+  which file. The crash registers showed names body_in_neck_geo_Shape and mat_body nearby, but
+  those registers may be stale.
+- **Cave data:** physics scratch data reaches down to CAVE+0xCFA0, so keep below that.
+

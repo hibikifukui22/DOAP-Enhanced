@@ -17,8 +17,8 @@ import struct
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CLEAN = os.path.join(ROOT, "Dead or Alive - Paradise (USA) (En,Ja,Fr,De).iso")
-NORMAL = os.path.join(ROOT, "build", "DOAP-pt6.iso")
-HIPOLY = os.path.join(ROOT, "build", "DOAP-pt6-hipoly.iso")
+NORMAL = os.path.join(ROOT, "build", "DOAP-pt12.iso")
+HIPOLY = os.path.join(ROOT, "build", "DOAP-pt12-hipoly.iso")
 OUT = os.path.join(ROOT, "patcher", "payload.bin")
 CHUNK = 1 << 24
 GAP = 64

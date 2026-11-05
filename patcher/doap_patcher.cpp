@@ -38,7 +38,7 @@ namespace {
 using namespace Gdiplus;
 namespace fs = std::filesystem;
 
-constexpr const wchar_t* kVersion = L"v1.0.0";
+constexpr const wchar_t* kVersion = L"v1.0.1";
 constexpr const wchar_t* kAppName = L"Dead or Alive Paradise Game Patcher";
 constexpr const wchar_t* kOutputName = L"Dead or Alive Paradise 60 FPS.iso";
 constexpr float kDesignW = 1600.0f;

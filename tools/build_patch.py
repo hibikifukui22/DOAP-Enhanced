@@ -153,6 +153,36 @@ def emit_casino_ui(a):
     emit_tail(a, "slots_pay", 0x9F44C)
 
 
+# Crash loading some volleyball matches with high poly models: 0x20B918 calls 0x21631C to copy palette
+# data into object +0x5C, which was 0 on the object in the crash, so memcpy wrote to an invalid address
+# (seen at 32 and 64 MB, so not a memory shortage). Why the buffer is missing is not known yet. Both
+# copy routines reached from 0x20AFD4 now skip the copy unless the destination is at or above VRAM
+# (0x04000000, uncached bit ignored). 0x21631C takes arguments in a0-a3 and t0-t3, so the check uses t4.
+def emit_copy_guards(a):
+    a.label("tex_guard")
+    a.lw("t4", 0x24, "a0")
+    a.srl("t4", "t4", 24)
+    a.andi("t4", "t4", 0x3F)
+    a.sltiu("t4", "t4", 4)
+    a.bne("t4", "zero", "tex_skip")
+    a.nop()
+    emit_tail(a, "tex_copy", 0x21625C)
+    a.label("tex_skip")
+    a.jr("ra")
+    a.nop()
+    a.label("pal_guard")
+    a.lw("t4", 0x5C, "a0")
+    a.srl("t4", "t4", 24)
+    a.andi("t4", "t4", 0x3F)
+    a.sltiu("t4", "t4", 4)
+    a.bne("t4", "zero", "pal_skip")
+    a.nop()
+    emit_tail(a, "pal_copy", 0x21631C)
+    a.label("pal_skip")
+    a.jr("ra")
+    a.nop()
+
+
 def emit_casino_mult(a):
     a.label("casino_setmoney")
     a.addiu("sp", "sp", -16)
@@ -257,7 +287,7 @@ LOAD = {"b": "lbu", "h": "lhu", "w": "lw"}
 STORE = {"b": "sb", "h": "sh", "w": "sw"}
 
 
-def vb_ai_wait_hold(recorder=False, pool=False, vb=True, cam=False, phys=False, skip_targets=(), casino=False, anim_clamp=False):
+def vb_ai_wait_hold(recorder=False, pool=False, vb=True, cam=False, phys=False, skip_targets=(), casino=False, anim_clamp=False, ph_hud=False, tex_guard=False):
     """Hold the volleyball AI script's per-update counters on alternate updates.
 
     Each wrapped routine runs once per update per player. The wrapper snapshots the listed
@@ -361,13 +391,22 @@ def vb_ai_wait_hold(recorder=False, pool=False, vb=True, cam=False, phys=False, 
         emit_casino_mult(a)
         for site in CASINO_SETMONEY_SITES:
             calls.append((site, 0x1AAAF0, "casino_setmoney"))
+    if tex_guard:
+        emit_copy_guards(a)
+        calls.append((0x20B1C8, 0x21625C, "tex_guard"))
+        calls.append((0x20B610, 0x21625C, "tex_guard"))
+        calls.append((0x20B918, 0x21631C, "pal_guard"))
     if phys:
         emit_phys_smooth(a)
         calls.append((0xCC094, 0xC5864, "phys_outer"))
         calls.append((0xC5924, 0xC60B8, "phys_step"))
     if pool:
-        emit_pool_hop(a)
+        emit_pool_hop(a, ph_hud)
         calls.append((0xCE6B4, 0xD1378, "ph_wrap"))
+        if ph_hud:
+            emit_ph_text(a)
+            calls.append((0xD0704, 0x2FCE0, "ph_text"))
+            calls.append((0xD1194, 0x2FCE0, "ph_text"))
     if recorder == "generic":
         pass
     elif recorder:
@@ -715,7 +754,57 @@ def emit_cam_lerp(a):
     a.addiu("sp", "sp", 48)
 
 
-def emit_pool_hop(a):
+# Pool Hopping HUD: the timer (0xD0704) and the hop numbers (0xD1194, up to 8) are drawn by the text
+# routine 0x2FCE0 inside the logic, which runs every other update, so they showed on alternate
+# frames. ph_text keeps a copy of each text record and its string, and the skipped update draws the
+# copies again; no game state moves. Cave data between the Pool Hopping and physics blocks:
+# +0 count, entries from +0x10: record 0x28 bytes, then its string (0x20 bytes).
+PH_TEXT = CAVE + 0xCD00
+PH_TEXT_MAX, PH_TEXT_REC, PH_TEXT_STR = 9, 0x28, 0x20
+
+
+def emit_ph_text(a):
+    a.label("ph_text")
+    a.move("t9", "ra")
+    a.bal("ph_text_pc")
+    a.nop()
+    a.label("ph_text_pc")
+    here = a.labels["ph_text_pc"]
+    a.li32("t8", PH_TEXT - here)
+    a.addu("t8", "t8", "ra")
+    a.lw("t0", 0, "t8")
+    a.sltiu("t1", "t0", PH_TEXT_MAX)
+    a.beq("t1", "zero", "ph_text_draw")
+    a.nop()
+    a.sll("t2", "t0", 6)
+    a.sll("t3", "t0", 3)
+    a.addu("t2", "t2", "t3")             # entry size 0x48
+    a.addu("t2", "t2", "t8")
+    a.addiu("t2", "t2", 0x10)
+    for k in range(0, PH_TEXT_REC, 4):
+        a.lw("t5", k, "a0")
+        a.sw("t5", k, "t2")
+    a.lw("t6", 4, "a0")
+    a.beq("t6", "zero", "ph_text_count")
+    a.nop()
+    for k in range(0, PH_TEXT_STR, 4):   # byte copy: the string may not be word aligned
+        for b in range(4):
+            a.lbu("t5", k + b, "t6")
+            a.sb("t5", PH_TEXT_REC + k + b, "t2")
+    a.addiu("t5", "t2", PH_TEXT_REC)
+    a.sw("t5", 4, "t2")
+    a.label("ph_text_count")
+    a.addiu("t0", "t0", 1)
+    a.sw("t0", 0, "t8")
+    a.label("ph_text_draw")
+    a.li32("t8", 0x2FCE0 - here)
+    a.addu("t8", "t8", "ra")
+    a.move("ra", "t9")
+    a.jr("t8")
+    a.nop()
+
+
+def emit_pool_hop(a, hud=False):
     a.label("ph_wrap")
     a.addiu("sp", "sp", -48)
     a.sw("ra", 0, "sp")
@@ -792,6 +881,10 @@ def emit_pool_hop(a):
         a.lw("t5", 0, "t1")
         a.sw("t5", 0, "t2")
     block_loop("ph_snap", snap)
+    if hud:
+        a.li32("t0", PH_TEXT - here)
+        a.addu("t0", "t0", "s1")
+        a.sw("zero", 0, "t0")
     a.li32("t9", 0xD1378 - here)
     a.addu("t9", "t9", "s1")
     a.jalr("t9")
@@ -863,6 +956,27 @@ def emit_pool_hop(a):
         a.label(nxt + "_clr")
         a.sw("zero", 0, "t7")
     block_loop("ph_rs", restore)
+    if hud:
+        a.li32("s3", PH_TEXT - here)
+        a.addu("s3", "s3", "s1")
+        a.ori("s4", "zero", 0)
+        a.label("ph_redraw")
+        a.lw("t0", 0, "s3")
+        a.sltu("t1", "s4", "t0")
+        a.beq("t1", "zero", "ph_ret")
+        a.nop()
+        a.sll("t2", "s4", 6)
+        a.sll("t3", "s4", 3)
+        a.addu("a0", "t2", "t3")
+        a.addu("a0", "a0", "s3")
+        a.addiu("a0", "a0", 0x10)
+        a.li32("t9", 0x2FCE0 - here)
+        a.addu("t9", "t9", "s1")
+        a.jalr("t9")
+        a.ori("a1", "zero", 1)
+        a.addiu("s4", "s4", 1)
+        a.b("ph_redraw")
+        a.nop()
 
     a.label("ph_ret")
     a.lw("ra", 0, "sp")
@@ -1050,6 +1164,7 @@ PATCHSETS = {
     "pt3d": lambda: GATE + SPEED_HALF + SCENE_DT_HALF + ANIM_FRAC + CASINO_ANIM_HALF + vb_ai_wait_hold(recorder="generic", pool=True, cam=True, phys=True, casino=True),
     "pt4": lambda: GATE + SPEED_HALF + SCENE_DT_HALF + ANIM_FRAC + CASINO_ANIM_HALF + vb_ai_wait_hold(pool=True, cam=True, phys=True, casino=True, anim_clamp=True),
     "pt6": lambda: GATE + SPEED_HALF + SCENE_DT_HALF + ANIM_FRAC + CASINO_ANIM_HALF + CASINO_ODDS_X10 + vb_ai_wait_hold(pool=True, cam=True, phys=True, casino="ui", anim_clamp=True),
+    "pt12": lambda: GATE + SPEED_HALF + SCENE_DT_HALF + ANIM_FRAC + CASINO_ANIM_HALF + CASINO_ODDS_X10 + vb_ai_wait_hold(pool=True, cam=True, phys=True, casino="ui", anim_clamp=True, ph_hud=True, tex_guard=True),
     "pt4d": lambda: GATE + SPEED_HALF + SCENE_DT_HALF + ANIM_FRAC + CASINO_ANIM_HALF + vb_ai_wait_hold(recorder="generic", pool=True, cam=True, phys=True, casino=True, anim_clamp=True),
     "bisA": lambda: GATE + SPEED_HALF + SCENE_DT_HALF + ANIM_FRAC + vb_ai_wait_hold(pool=True, cam=True),
     "bisB": lambda: GATE + SPEED_HALF + SCENE_DT_HALF + ANIM_FRAC + vb_ai_wait_hold(pool=True, cam=True, skip_targets=(0xA4BC4,)),

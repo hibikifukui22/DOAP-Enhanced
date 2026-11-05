@@ -31,7 +31,7 @@ ISO and it writes a new, patched ISO to play in the
 > Not affiliated with or endorsed by Koei Tecmo, Team NINJA or Sony. All
 > trademarks belong to their respective owners.
 
-Current version: **1.0.0** (see [CHANGELOG.md](CHANGELOG.md)).
+Current version: **1.0.1** (see [CHANGELOG.md](CHANGELOG.md)).
 
 ## Supported game version
 
@@ -43,7 +43,7 @@ Only the clean USA release is supported:
 | Region | USA (En, Ja, Fr, De) |
 | ISO size | 869,990,400 bytes |
 | ISO SHA-256 | `b70b13194790e1f078386204b460df5d484177cdb974d2f7fdff6b38afe50476` |
-| Patched ISO SHA-256 | `502d089366e29ce7b1909840470b366bce94913881c9719b7381d589fa25a0bc` |
+| Patched ISO SHA-256 | `bfa56ff84acce319f4b59b37bd71c32fe784bfdd6fbd64df73a6b27b1ff14bdb` |
 
 The patcher checks your ISO before it changes anything. A dump with a different
 full-disc hash can still be patched, as long as it is the right size and every
@@ -70,6 +70,11 @@ or feels off.
 
 - **Menus run at double speed.** Fixing this needs a big rebuild of the menu
   code. It does not affect gameplay.
+- **Volleyball load crash workaround.** Some volleyball matches crashed while
+  loading in 1.0.0. Since 1.0.1 the game skips the texture palette copy that
+  caused it, and we are still looking into why that palette has no buffer. If
+  you see a wrong-coloured or missing texture, please
+  [open an issue](../../issues) with the girls and swimsuits on screen.
 
 ## Patching
 
