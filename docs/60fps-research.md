@@ -269,3 +269,14 @@ User report on `gate-speed-scene`: passes/sets and spikes miss exactly like DOAX
   those registers may be stale.
 - **Cave data:** physics scratch data reaches down to CAVE+0xCFA0, so keep below that.
 
+## 2026-11-05: root cause of the volleyball crash (1.0.2, build pt14)
+
+- Texture setup 0x215DE8 takes pixels and palette from a fixed pool (0x205FC0). Failed pixel
+  allocations fall back to the heap (+0x10 = 0), but the palette allocation at 0x216108 is unchecked.
+  With high poly textures filling the pool, an object could get pixels and no palette (+0x5C = 0),
+  and 0x21631C crashed. The 1.0.1 guard skipped the palette, which broke one girl's eyes.
+- Fix: pal_alloc wraps 0x216108. On failure it frees the pixels from the pool and clears +0x10, so
+  the game's own heap path allocates both. The guards stay as a safety net.
+- Eye bug gone in play on pt13. The fallback counter was not read, so firing is inferred.
+- Patcher: payload v2 adds small XOR upgrades from earlier releases (about 3 KB each).
+

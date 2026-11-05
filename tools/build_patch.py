@@ -183,6 +183,49 @@ def emit_copy_guards(a):
     a.nop()
 
 
+# Texture pool fallback (the cause of the volleyball load crash): texture setup 0x215DE8 takes pixels
+# and palette from a fixed pool (0x205FC0). A failed pixel allocation falls back to the heap (object
+# +0x10 = 0), but the palette allocation at 0x216108 is unchecked, so with the pool full of high poly
+# textures an object could get pixels and no palette. Then 0x21631C wrote to +0x5C = 0. On failure,
+# free the pixels from the pool and clear +0x10, so the game's own heap path just below allocates
+# both. s0 = object.
+
+
+def emit_pal_alloc(a):
+    a.label("pal_alloc")
+    a.addiu("sp", "sp", -16)
+    a.sw("ra", 0, "sp")
+    a.sw("a0", 4, "sp")
+    a.bal("pal_alloc_pc")
+    a.nop()
+    a.label("pal_alloc_pc")
+    here = a.labels["pal_alloc_pc"]
+    a.sw("ra", 8, "sp")
+    a.li32("t9", 0x205FC0 - here)
+    a.addu("t9", "t9", "ra")
+    a.jalr("t9")
+    a.nop()
+    a.bne("v0", "zero", "pal_alloc_done")
+    a.nop()
+    a.lw("a1", 0x24, "s0")
+    a.beq("a1", "zero", "pal_alloc_clear")
+    a.nop()
+    a.lw("a0", 4, "sp")
+    a.lw("t0", 8, "sp")
+    a.li32("t9", 0x205FDC - here)
+    a.addu("t9", "t9", "t0")
+    a.jalr("t9")
+    a.nop()
+    a.label("pal_alloc_clear")
+    a.sw("zero", 0x24, "s0")
+    a.sw("zero", 0x10, "s0")
+    a.move("v0", "zero")
+    a.label("pal_alloc_done")
+    a.lw("ra", 0, "sp")
+    a.jr("ra")
+    a.addiu("sp", "sp", 16)
+
+
 def emit_casino_mult(a):
     a.label("casino_setmoney")
     a.addiu("sp", "sp", -16)
@@ -287,7 +330,7 @@ LOAD = {"b": "lbu", "h": "lhu", "w": "lw"}
 STORE = {"b": "sb", "h": "sh", "w": "sw"}
 
 
-def vb_ai_wait_hold(recorder=False, pool=False, vb=True, cam=False, phys=False, skip_targets=(), casino=False, anim_clamp=False, ph_hud=False, tex_guard=False):
+def vb_ai_wait_hold(recorder=False, pool=False, vb=True, cam=False, phys=False, skip_targets=(), casino=False, anim_clamp=False, ph_hud=False, tex_guard=False, pal_fallback=False):
     """Hold the volleyball AI script's per-update counters on alternate updates.
 
     Each wrapped routine runs once per update per player. The wrapper snapshots the listed
@@ -396,6 +439,9 @@ def vb_ai_wait_hold(recorder=False, pool=False, vb=True, cam=False, phys=False, 
         calls.append((0x20B1C8, 0x21625C, "tex_guard"))
         calls.append((0x20B610, 0x21625C, "tex_guard"))
         calls.append((0x20B918, 0x21631C, "pal_guard"))
+    if pal_fallback:
+        emit_pal_alloc(a)
+        calls.append((0x216108, 0x205FC0, "pal_alloc"))
     if phys:
         emit_phys_smooth(a)
         calls.append((0xCC094, 0xC5864, "phys_outer"))
@@ -1165,6 +1211,7 @@ PATCHSETS = {
     "pt4": lambda: GATE + SPEED_HALF + SCENE_DT_HALF + ANIM_FRAC + CASINO_ANIM_HALF + vb_ai_wait_hold(pool=True, cam=True, phys=True, casino=True, anim_clamp=True),
     "pt6": lambda: GATE + SPEED_HALF + SCENE_DT_HALF + ANIM_FRAC + CASINO_ANIM_HALF + CASINO_ODDS_X10 + vb_ai_wait_hold(pool=True, cam=True, phys=True, casino="ui", anim_clamp=True),
     "pt12": lambda: GATE + SPEED_HALF + SCENE_DT_HALF + ANIM_FRAC + CASINO_ANIM_HALF + CASINO_ODDS_X10 + vb_ai_wait_hold(pool=True, cam=True, phys=True, casino="ui", anim_clamp=True, ph_hud=True, tex_guard=True),
+    "pt14": lambda: GATE + SPEED_HALF + SCENE_DT_HALF + ANIM_FRAC + CASINO_ANIM_HALF + CASINO_ODDS_X10 + vb_ai_wait_hold(pool=True, cam=True, phys=True, casino="ui", anim_clamp=True, ph_hud=True, tex_guard=True, pal_fallback=True),
     "pt4d": lambda: GATE + SPEED_HALF + SCENE_DT_HALF + ANIM_FRAC + CASINO_ANIM_HALF + vb_ai_wait_hold(recorder="generic", pool=True, cam=True, phys=True, casino=True, anim_clamp=True),
     "bisA": lambda: GATE + SPEED_HALF + SCENE_DT_HALF + ANIM_FRAC + vb_ai_wait_hold(pool=True, cam=True),
     "bisB": lambda: GATE + SPEED_HALF + SCENE_DT_HALF + ANIM_FRAC + vb_ai_wait_hold(pool=True, cam=True, skip_targets=(0xA4BC4,)),

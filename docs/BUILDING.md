@@ -22,12 +22,13 @@ Put these in the repository root:
 ## Build the patched ISOs
 
 ```powershell
-python tools/build_patch.py pt12 --iso
-python -I tools/hipoly.py pt12 pt12-hipoly
+python tools/build_patch.py pt14 --iso
+python -I tools/hipoly.py pt14 pt14-hipoly
 ```
 
-These write `build/DOAP-pt12.iso` and `build/DOAP-pt12-hipoly.iso`. The second is
-what the patcher produces. Every word patch checks the original value first, so
+These write `build/DOAP-pt14.iso` and `build/DOAP-pt14-hipoly.iso`. The second is
+what the patcher produces. To build the patcher's upgrades from earlier releases,
+also build those ISOs: `pt6` is v1.0.0 and `pt12` is v1.0.1, the same way. Every word patch checks the original value first, so
 a wrong EBOOT is refused.
 
 ## Build the patcher

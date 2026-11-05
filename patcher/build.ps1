@@ -9,6 +9,6 @@ Set-Location $root
 New-Item -ItemType Directory -Force obj, release | Out-Null
 rc /nologo /fo obj\patcher.res resources\patcher.rc
 if ($LASTEXITCODE) { throw 'rc failed' }
-cl /nologo /std:c++17 /EHsc /O2 /MT /utf-8 /W3 /Fo:obj\ /Fe:"release\DOA Paradise 60 FPS Patcher.exe" doap_patcher.cpp obj\patcher.res /link /SUBSYSTEM:WINDOWS gdiplus.lib shlwapi.lib bcrypt.lib comdlg32.lib shell32.lib user32.lib gdi32.lib ole32.lib
+cl /nologo /std:c++17 /EHsc /O2 /MT /utf-8 /W3 /Fo:obj\ /Fe:"release\DOA Paradise 60 FPS Patcher.exe" doap_patcher.cpp obj\patcher.res /link /SUBSYSTEM:WINDOWS gdiplus.lib shlwapi.lib bcrypt.lib winhttp.lib comdlg32.lib shell32.lib user32.lib gdi32.lib ole32.lib
 if ($LASTEXITCODE) { throw 'cl failed' }
 Get-FileHash "release\DOA Paradise 60 FPS Patcher.exe" -Algorithm SHA256

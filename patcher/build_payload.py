@@ -10,6 +10,9 @@ payload.bin, little endian:
   'DOAP' u32 version, u64 iso size, sha256 clean ISO, sha256 normal ISO, sha256 high-poly ISO,
   sha256 of the source bytes under all runs, u32 run count, then runs sorted by offset:
   u64 offset, u32 length, u32 group (0 = always, 1 = high-poly only), then all run data in order.
+  Then u32 upgrade count, and per earlier release: 16-byte name, sha256 of its ISO, sha256 of its
+  bytes under the upgrade runs, sha256 of the current release's bytes under them, u32 run count,
+  runs (as above), run data. Upgrade data is the XOR of the two patched ISOs, so it stays small.
 """
 import hashlib
 import os
@@ -17,8 +20,11 @@ import struct
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CLEAN = os.path.join(ROOT, "Dead or Alive - Paradise (USA) (En,Ja,Fr,De).iso")
-NORMAL = os.path.join(ROOT, "build", "DOAP-pt12.iso")
-HIPOLY = os.path.join(ROOT, "build", "DOAP-pt12-hipoly.iso")
+NORMAL = os.path.join(ROOT, "build", "DOAP-pt14.iso")
+HIPOLY = os.path.join(ROOT, "build", "DOAP-pt14-hipoly.iso")
+# Earlier releases: their ISOs can be upgraded without the clean ISO.
+PREVIOUS = [("v1.0.0", os.path.join(ROOT, "build", "DOAP-pt6-hipoly.iso")),
+            ("v1.0.1", os.path.join(ROOT, "build", "DOAP-pt12-hipoly.iso"))]
 OUT = os.path.join(ROOT, "patcher", "payload.bin")
 CHUNK = 1 << 24
 GAP = 64
@@ -85,8 +91,23 @@ def main():
         src.update(clean)
         table += struct.pack("<QII", o, n, group)
         data += xor(clean, read(target, o, n))
-    head = b"DOAP" + struct.pack("<IQ", 1, size) + sha(CLEAN) + sha(NORMAL) + sha(HIPOLY) + src.digest()
-    open(OUT, "wb").write(head + struct.pack("<I", len(runs)) + table + data)
+    head = b"DOAP" + struct.pack("<IQ", 2, size) + sha(CLEAN) + sha(NORMAL) + sha(HIPOLY) + src.digest()
+    upgrades = struct.pack("<I", len(PREVIOUS))
+    for name, path in PREVIOUS:
+        assert os.path.getsize(path) == size
+        delta = diff_runs(path, HIPOLY)
+        old, new = hashlib.sha256(), hashlib.sha256()
+        delta_table, delta_data = b"", b""
+        for o, n in delta:
+            a, b = read(path, o, n), read(HIPOLY, o, n)
+            old.update(a)
+            new.update(b)
+            delta_table += struct.pack("<QII", o, n, 0)
+            delta_data += xor(a, b)
+        upgrades += name.encode().ljust(16, bytes(1)) + sha(path) + old.digest() + new.digest()
+        upgrades += struct.pack("<I", len(delta)) + delta_table + delta_data
+        print("upgrade", name, len(delta), "runs,", len(delta_data), "bytes")
+    open(OUT, "wb").write(head + struct.pack("<I", len(runs)) + table + data + upgrades)
     print("payload", os.path.getsize(OUT), "bytes,", len(runs), "runs")
     print("clean sha", sha(CLEAN).hex())
 

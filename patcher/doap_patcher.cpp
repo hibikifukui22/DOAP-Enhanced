@@ -12,6 +12,7 @@
 #include <commdlg.h>
 #include <shellapi.h>
 #include <shlwapi.h>
+#include <winhttp.h>
 
 #include <algorithm>
 // gdiplus.h expects min/max, which NOMINMAX removes.
@@ -22,6 +23,9 @@ using std::min;
 #include <gdiplus.h>
 
 #include <array>
+#include <cmath>
+#include <fstream>
+#include <sstream>
 #include <atomic>
 #include <cstdint>
 #include <cstring>
@@ -38,7 +42,7 @@ namespace {
 using namespace Gdiplus;
 namespace fs = std::filesystem;
 
-constexpr const wchar_t* kVersion = L"v1.0.1";
+constexpr const wchar_t* kVersion = L"v1.0.2";
 constexpr const wchar_t* kAppName = L"Dead or Alive Paradise Game Patcher";
 constexpr const wchar_t* kOutputName = L"Dead or Alive Paradise 60 FPS.iso";
 constexpr float kDesignW = 1600.0f;
@@ -63,10 +67,25 @@ struct Run {
   const uint8_t* data;
 };
 
+// An earlier release's ISO and what turns it into the current one.
+struct Upgrade {
+  std::wstring name;  // "v1.0.1"
+  Sha iso{}, from_runs{}, to_runs{};
+  std::vector<Run> runs;
+};
+
 struct Payload {
   uint64_t iso_size = 0;
   Sha clean{}, normal{}, high_poly{}, source_runs{};
   std::vector<Run> runs;
+  std::vector<Upgrade> upgrades;
+};
+
+enum class IsoKind { kUnknown, kClean, kUpgrade, kLatest };
+
+struct IsoInfo {
+  IsoKind kind = IsoKind::kUnknown;
+  const Upgrade* upgrade = nullptr;
 };
 
 struct Hit {
@@ -88,10 +107,11 @@ Payload g_payload;
 
 std::wstring g_source;
 fs::path g_finished_output;
+IsoKind g_source_kind = IsoKind::kUnknown;
 
 // Shared with the patch thread.
 std::mutex g_status_mutex;
-std::wstring g_status = L"Choose your clean US ISO, or drop it on this window.";
+std::wstring g_status = L"Choose your US ISO, clean or patched, or drop it on this window.";
 bool g_status_error = false;
 std::atomic<bool> g_busy{false};
 std::atomic<float> g_progress{0.0f};
@@ -146,7 +166,38 @@ bool LoadPayload() {
     data += run.length;
     g_payload.runs.push_back(run);
   }
-  return data == base + size;
+  const auto read_runs = [&](std::vector<Run>& runs, const uint8_t*& from) {
+    uint32_t run_count = 0;
+    std::memcpy(&run_count, from, 4);
+    from += 4;
+    const uint8_t* run_data = from + size_t(run_count) * 16;
+    for (uint32_t i = 0; i < run_count; ++i, from += 16) {
+      Run run{};
+      std::memcpy(&run.offset, from, 8);
+      std::memcpy(&run.length, from + 8, 4);
+      std::memcpy(&run.group, from + 12, 4);
+      run.data = run_data;
+      run_data += run.length;
+      runs.push_back(run);
+    }
+    from = run_data;
+  };
+  at = data;
+  uint32_t upgrades = 0;
+  std::memcpy(&upgrades, at, 4);
+  at += 4;
+  for (uint32_t i = 0; i < upgrades; ++i) {
+    Upgrade upgrade;
+    for (int k = 0; k < 16 && at[k]; ++k) upgrade.name += wchar_t(at[k]);
+    at += 16;
+    for (Sha* sha : {&upgrade.iso, &upgrade.from_runs, &upgrade.to_runs}) {
+      std::memcpy(sha->data(), at, 32);
+      at += 32;
+    }
+    read_runs(upgrade.runs, at);
+    g_payload.upgrades.push_back(std::move(upgrade));
+  }
+  return at == base + size;
 }
 
 class Sha256 {
@@ -214,17 +265,40 @@ class File {
 
 fs::path OutputPath(const fs::path& source) { return source.parent_path() / kOutputName; }
 
-// All the bytes the patch touches must match the clean disc; this also proves the XOR is safe on
-// a dump that differs elsewhere (padding, for example).
-bool SourceMatches(File& source) {
+// The hash of the source bytes under these runs. Matching it proves the XOR is safe, even on a dump
+// that differs elsewhere (padding, for example).
+bool RunsHash(File& source, const std::vector<Run>& runs, Sha& out) {
   Sha256 sha;
   std::vector<uint8_t> buffer;
-  for (const Run& run : g_payload.runs) {
+  for (const Run& run : runs) {
     buffer.resize(run.length);
     if (!source.Seek(run.offset) || !source.Read(buffer.data(), run.length)) return false;
     sha.Add(buffer.data(), run.length);
   }
-  return sha.Finish() == g_payload.source_runs;
+  out = sha.Finish();
+  return true;
+}
+
+// Works out what the ISO is: clean, an earlier release, or already the current release.
+IsoInfo DetectIso(File& source) {
+  IsoInfo info;
+  Sha sha{};
+  if (RunsHash(source, g_payload.runs, sha) && sha == g_payload.source_runs) {
+    info.kind = IsoKind::kClean;
+    return info;
+  }
+  bool latest = false;
+  for (const Upgrade& upgrade : g_payload.upgrades) {
+    if (!RunsHash(source, upgrade.runs, sha)) continue;
+    if (sha == upgrade.from_runs) {
+      info.kind = IsoKind::kUpgrade;
+      info.upgrade = &upgrade;
+      return info;
+    }
+    latest = latest || sha == upgrade.to_runs;
+  }
+  if (latest) info.kind = IsoKind::kLatest;
+  return info;
 }
 
 void Fail(const std::wstring& text) {
@@ -239,10 +313,14 @@ void PatchWorker(fs::path source_path, fs::path output_path) {
     File source(source_path, false);
     if (!source.ok()) return Fail(L"The ISO could not be opened. Is it in use by another program?");
     if (source.Size() != g_payload.iso_size)
-      return Fail(L"This ISO is the wrong size. It needs a clean dump of Dead or Alive Paradise (USA, ULUS-10521).");
+      return Fail(L"This ISO is the wrong size. It needs Dead or Alive Paradise (USA, ULUS-10521).");
     SetStatus(L"Checking the ISO...");
-    if (!SourceMatches(source))
-      return Fail(L"This ISO doesn't match the clean USA release (ULUS-10521), so it can't be patched.");
+    const IsoInfo info = DetectIso(source);
+    if (info.kind == IsoKind::kLatest) return SetStatus(std::wstring(L"This ISO is already on ") + kVersion + L".");
+    if (info.kind == IsoKind::kUnknown)
+      return Fail(L"This ISO isn't the clean USA release or a known patched version, so it can't be patched.");
+    const std::vector<Run>& runs = info.kind == IsoKind::kUpgrade ? info.upgrade->runs : g_payload.runs;
+    const Sha& known_source = info.kind == IsoKind::kUpgrade ? info.upgrade->iso : g_payload.clean;
     File output(temporary, true);
     if (!output.ok()) return Fail(L"The new ISO can't be written in that folder. Check it isn't read-only.");
     SetStatus(L"Writing the patched ISO...");
@@ -253,7 +331,7 @@ void PatchWorker(fs::path source_path, fs::path output_path) {
       const DWORD size = DWORD(std::min<uint64_t>(buffer.size(), g_payload.iso_size - at));
       if (!source.Read(buffer.data(), size)) return Fail(L"The ISO could not be read to the end.");
       source_sha.Add(buffer.data(), size);
-      for (const Run& run : g_payload.runs) {
+      for (const Run& run : runs) {
         const uint64_t from = std::max(at, run.offset), to = std::min(at + size, run.offset + run.length);
         for (uint64_t i = from; i < to; ++i) buffer[size_t(i - at)] ^= run.data[i - run.offset];
       }
@@ -264,7 +342,7 @@ void PatchWorker(fs::path source_path, fs::path output_path) {
     }
     output.Close();
     source.Close();
-    const bool canonical = source_sha.Finish() == g_payload.clean;
+    const bool canonical = source_sha.Finish() == known_source;
     if (output_sha.Finish() != g_payload.high_poly && canonical)
       return Fail(L"The finished ISO failed verification, so it was removed. Your original is untouched.");
     if (!MoveFileExW(temporary.c_str(), output_path.c_str(), MOVEFILE_REPLACE_EXISTING))
@@ -283,7 +361,23 @@ void SelectSource(const std::wstring& path) {
   g_source = path;
   g_finished_output.clear();
   g_progress = 0.0f;
-  SetStatus(L"Ready to patch.");
+  g_source_kind = IsoKind::kUnknown;
+  File source(path, false);
+  if (!source.ok()) return SetStatus(L"The ISO could not be opened. Is it in use by another program?", true);
+  if (source.Size() != g_payload.iso_size)
+    return SetStatus(L"This ISO is the wrong size. It needs Dead or Alive Paradise (USA, ULUS-10521).", true);
+  const IsoInfo info = DetectIso(source);
+  g_source_kind = info.kind;
+  switch (info.kind) {
+    case IsoKind::kClean:
+      return SetStatus(std::wstring(L"Clean ISO found. PATCH will install ") + kVersion + L".");
+    case IsoKind::kUpgrade:
+      return SetStatus(info.upgrade->name + L" ISO found. PATCH will update it to " + kVersion + L".");
+    case IsoKind::kLatest:
+      return SetStatus(std::wstring(L"This ISO is already on ") + kVersion + L". Nothing to do.");
+    default:
+      return SetStatus(L"This ISO isn't the clean USA release or a known patched version.", true);
+  }
 }
 
 void Browse() {
@@ -295,7 +389,7 @@ void Browse() {
   dialog.lpstrFilter = L"PSP disc image (*.iso)\0*.iso\0All files\0*.*\0";
   dialog.lpstrFile = path;
   dialog.nMaxFile = DWORD(std::size(path));
-  dialog.lpstrTitle = L"Choose your clean Dead or Alive Paradise ISO";
+  dialog.lpstrTitle = L"Choose your Dead or Alive Paradise ISO";
   dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_HIDEREADONLY;
   if (GetOpenFileNameW(&dialog)) SelectSource(path);
 }
@@ -303,10 +397,11 @@ void Browse() {
 void StartPatch() {
   if (g_busy) return;
   if (g_source.empty()) return Browse();
+  if (g_source_kind == IsoKind::kLatest || g_source_kind == IsoKind::kUnknown) return;
   const fs::path source = g_source, output = OutputPath(source);
   std::error_code error;
-  if (fs::equivalent(source, output, error))
-    return SetStatus(L"That ISO has the patched file's name. Choose your clean ISO instead.", true);
+  if (g_source_kind == IsoKind::kClean && fs::equivalent(source, output, error))
+    return SetStatus(L"That clean ISO has the patched file's name. Rename it first.", true);
   if (fs::exists(output, error)) {
     const std::wstring question = output.filename().wstring() + L" already exists. Replace it?";
     if (MessageBoxW(g_window, question.c_str(), kAppName, MB_YESNO | MB_ICONQUESTION) != IDYES) return;
@@ -455,6 +550,8 @@ void ShowInfo(const wchar_t* title, const wchar_t* text) {
   g_info = std::make_unique<InfoPopup>(InfoPopup{title, text});
 }
 
+#include "doap_update.h"
+
 // Title top left; ISO row, status and progress above the bottom row of buttons, as on the DOAX2
 // launcher's main page.
 void PaintMain(Graphics& g) {
@@ -465,7 +562,7 @@ void PaintMain(Graphics& g) {
 
   const bool busy = g_busy;
   // Source ISO.
-  DrawText(g, L"CLEAN USA ISO (ULUS-10521)", RectF(60, 530, 900, 34), 24, true, kWhite, StringAlignmentNear);
+  DrawText(g, L"USA ISO (ULUS-10521), CLEAN OR PATCHED", RectF(60, 530, 900, 34), 24, true, kWhite, StringAlignmentNear);
   const RectF field(60, 568, 1230, 62);
   const int field_id = AddHit(field, [] { Browse(); });
   GraphicsPath path;
@@ -514,6 +611,8 @@ void PaintMain(Graphics& g) {
              L"Casino payouts are 10x, and the winnings shown on screen match what you receive.");
   });
   const bool can_open = !g_finished_output.empty();
+  DrawButton(g, RectF(1070, 716, 470, 54), L"UPDATE", 28, [] { OpenUpdatePage(); },
+             busy ? ButtonStyle::kDisabled : ButtonStyle::kNormal);
   DrawButton(g, RectF(1070, 780, 470, 92), L"SHOW PATCHED ISO", 29, [] {
     const std::wstring arguments = L"/select,\"" + g_finished_output.wstring() + L"\"";
     ShellExecuteW(nullptr, L"open", L"explorer.exe", arguments.c_str(), nullptr, SW_SHOWNORMAL);
@@ -579,8 +678,12 @@ void Paint(HWND window) {
     g.TranslateTransform(g_layout.x, g_layout.y);
     g.ScaleTransform(g_layout.scale, g_layout.scale);
     g_hits.clear();
-    PaintMain(g);
-    DrawInfoPopupOverlay(g);
+    if (g_page == Page::kUpdate) {
+      PaintUpdate(g);
+    } else {
+      PaintMain(g);
+      DrawInfoPopupOverlay(g);
+    }
   }
   Graphics screen(hdc);
   screen.DrawImage(&buffer, 0, 0, width, height);
@@ -655,6 +758,9 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wparam, LPARA
       if (wparam == VK_ESCAPE && g_info) {
         g_info.reset();
         InvalidateRect(window, nullptr, FALSE);
+      } else if (wparam == VK_ESCAPE && g_page == Page::kUpdate && !UpdateSnapshot().busy) {
+        g_page = Page::kMain;
+        InvalidateRect(window, nullptr, FALSE);
       }
       return 0;
     case WM_DROPFILES: {
@@ -668,7 +774,11 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wparam, LPARA
       return 0;
     }
     case WM_TIMER:
-      if (wparam == kProgressTimer) InvalidateRect(window, nullptr, FALSE);
+      if (wparam == kProgressTimer || wparam == kUpdateTimer) InvalidateRect(window, nullptr, FALSE);
+      return 0;
+    case kUpdateChanged:
+      if (!UpdateSnapshot().busy) KillTimer(window, kUpdateTimer);
+      InvalidateRect(window, nullptr, FALSE);
       return 0;
     case kPatchFinished:
       KillTimer(window, kProgressTimer);
@@ -678,8 +788,8 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wparam, LPARA
       InvalidateRect(window, nullptr, FALSE);
       return 0;
     case WM_CLOSE:
-      if (g_busy) {
-        MessageBoxW(window, L"Patching is in progress. Please wait until it has finished.", kAppName,
+      if (g_busy || UpdateSnapshot().busy) {
+        MessageBoxW(window, L"Please wait until the current task has finished.", kAppName,
                     MB_OK | MB_ICONINFORMATION);
         return 0;
       }
@@ -727,6 +837,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR command_line, int show)
   g_window = CreateWindowExW(WS_EX_ACCEPTFILES, window_class.lpszClassName, kAppName, WS_OVERLAPPEDWINDOW,
                              (screen_w - frame.cx) / 2, (screen_h - frame.cy) / 2, frame.cx, frame.cy, nullptr,
                              nullptr, instance, nullptr);
+  CleanUpAfterUpdate();
   if (command_line && *command_line) {
     // Also lets an ISO be dropped on the program's icon.
     std::wstring path = command_line;

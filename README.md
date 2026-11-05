@@ -6,8 +6,8 @@
 
 A patcher for **Dead or Alive Paradise** (PSP) that runs the game at a true
 60 FPS at the original game speed, and replaces the lower poly girl models with
-the higher poly models from the game's cutscenes. You run it on your own clean
-ISO and it writes a new, patched ISO to play in the
+the higher poly models from the game's cutscenes. You run it on your own ISO and
+it writes a new, patched ISO to play in the
 [PPSSPP](https://www.ppsspp.org/) emulator.
 
 > [!WARNING]
@@ -21,8 +21,8 @@ ISO and it writes a new, patched ISO to play in the
 
 > **This repository and its releases do not contain the game.** No game code,
 > data, audio or video is included. You need your own copy of Dead or Alive
-> Paradise for the PSP. The patcher stores only the differences between the
-> original and patched discs, which are useless without your own clean ISO.
+> Paradise for the PSP. The patcher stores only the differences between game
+> versions, which are useless without your own ISO.
 > Please do not share or link to game files or patched ISOs in issues or pull
 > requests. The patcher's background, the icon and the logo on this page show a
 > Dead or Alive character and the game's logo, which belong to Koei Tecmo and
@@ -31,11 +31,11 @@ ISO and it writes a new, patched ISO to play in the
 > Not affiliated with or endorsed by Koei Tecmo, Team NINJA or Sony. All
 > trademarks belong to their respective owners.
 
-Current version: **1.0.1** (see [CHANGELOG.md](CHANGELOG.md)).
+Current version: **1.0.2** (see [CHANGELOG.md](CHANGELOG.md)).
 
 ## Supported game version
 
-Only the clean USA release is supported:
+Only the USA release is supported, clean or patched by this project:
 
 | | |
 |---|---|
@@ -43,12 +43,20 @@ Only the clean USA release is supported:
 | Region | USA (En, Ja, Fr, De) |
 | ISO size | 869,990,400 bytes |
 | ISO SHA-256 | `b70b13194790e1f078386204b460df5d484177cdb974d2f7fdff6b38afe50476` |
-| Patched ISO SHA-256 | `bfa56ff84acce319f4b59b37bd71c32fe784bfdd6fbd64df73a6b27b1ff14bdb` |
+| Patched ISO SHA-256 | `ca2dec7a3b35f25a71bfb188640c06b90d629831db33c93416859b17f98b8ca7` |
 
-The patcher checks your ISO before it changes anything. A dump with a different
-full-disc hash can still be patched, as long as it is the right size and every
-byte the patch touches matches the clean release. Other regions and already
-patched ISOs are rejected.
+The patcher detects which ISO you give it before it changes anything:
+
+| Your ISO | What the patcher does |
+|---|---|
+| Clean | Applies the full patch |
+| Patched with v1.0.0 or v1.0.1 | Updates it to the latest version, so you don't need to keep a clean ISO |
+| Already the latest version | Leaves it alone |
+| Anything else | Refuses it |
+
+A dump with a different full-disc hash can still be patched, as long as it is the
+right size and every byte the patch touches matches a known version. Other
+regions are refused.
 
 ## What it changes
 
@@ -70,23 +78,20 @@ or feels off.
 
 - **Menus run at double speed.** Fixing this needs a big rebuild of the menu
   code. It does not affect gameplay.
-- **Volleyball load crash workaround.** Some volleyball matches crashed while
-  loading in 1.0.0. Since 1.0.1 the game skips the texture palette copy that
-  caused it, and we are still looking into why that palette has no buffer. If
-  you see a wrong-coloured or missing texture, please
-  [open an issue](../../issues) with the girls and swimsuits on screen.
 
 ## Patching
 
 1. Download `DOAP-Enhanced-Patcher-v<version>.exe` from the
    [Releases](../../releases) page.
-2. Run it and press **BROWSE**, or drop your clean ISO on the window.
+2. Run it and press **BROWSE**, or drop your ISO on the window. It can be clean or
+   already patched.
 3. Press **PATCH**.
 
-The new file, `Dead or Alive Paradise 60 FPS.iso`, is written next to your
-original, and needs about 900 MB of free space. Your original ISO is never
-changed. The patcher checks the finished ISO against its expected SHA-256 when
-your source is the exact clean ISO.
+The new file, `Dead or Alive Paradise 60 FPS.iso`, is written next to the ISO you
+chose, and needs about 900 MB of free space. The ISO you chose isn't changed,
+unless it already has that name: then the patcher asks before replacing it. The
+patcher checks the finished ISO against its expected SHA-256 when your source
+exactly matches a known version.
 
 The patcher is not code signed, so Windows SmartScreen may warn you the first
 time you run it. Each release lists the file's SHA-256 in `SHA256SUMS.txt`.
@@ -100,10 +105,28 @@ time you run it. Each release lists the file's SHA-256 in `SHA256SUMS.txt`.
 
 Tested on PPSSPP v1.20.4 for Windows.
 
+## Updating
+
+From v1.0.2 on, the patcher can update itself:
+
+1. Press **UPDATE**. It checks GitHub for the latest release and shows your
+   version and the newest one.
+2. If a newer version is available, press **INSTALL UPDATE**. Progress bars show
+   each step: the download, a SHA-256 check against the release's
+   `SHA256SUMS.txt`, and installing.
+3. Press **RESTART PATCHER**, then choose your ISO and press **PATCH** to bring
+   it up to date.
+
+Updating replaces the patcher only. If the download fails its check, nothing is
+changed. Versions before v1.0.2 have no **UPDATE** button, so download v1.0.2
+from the [Releases](../../releases) page once.
+
 ## Network access
 
-The patcher does not use the internet or your local network. It has no updater
-and sends nothing about you or your PC.
+The only part of the patcher that goes online is the **UPDATE** page, and only
+while you open it. It asks GitHub for the latest release, and **INSTALL UPDATE**
+downloads it and checks its SHA-256 checksum. Patching itself works offline.
+Nothing about you or your PC is sent.
 
 ## System requirements
 
@@ -121,7 +144,7 @@ files stay out of git.
 
 | Path | Contents |
 |---|---|
-| `patcher/` | The patcher: GUI and patching code (`doap_patcher.cpp`), payload builder (`build_payload.py`), build script and artwork |
+| `patcher/` | The patcher: GUI and patching code (`doap_patcher.cpp`), updater (`doap_update.h`), payload builder (`build_payload.py`), build script and artwork |
 | `tools/` | Patch builder (`build_patch.py`), small MIPS assembler (`mips.py`), high poly index rewrite (`hipoly.py`), ISO tools and EBOOT analysis helpers |
 | `docs/` | Build guide and engineering notes from development |
 | `release/` | Release notes |
