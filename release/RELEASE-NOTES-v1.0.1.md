@@ -15,7 +15,7 @@ In v1.0.0, some volleyball matches could crash the game during the loading trans
 
 **What happened:** while loading the match, the game tried to copy a texture's colour palette into a buffer that did not exist, and PPSSPP stopped with an Invalid Memory Access error. Giving the game more memory made no difference, so this is not a memory shortage.
 
-**What changed:** the game now skips that copy when the buffer is missing, so the match loads. Nothing looked wrong in our testing.
+**What changed:** the game now skips that copy when the buffer is missing, so the match loads. Some odd textures may be visible during this testing period, but nothing game breaking.
 
 **We are still looking into it.** This stops the crash, but we don't yet know why the buffer is missing or which model causes it. If you see a wrong-coloured or missing texture in a match, please [tell us](https://github.com/hibikifukui22/DOAP-Enhanced/issues) which girls and swimsuits were on screen.
 
